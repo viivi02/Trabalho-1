@@ -1,4 +1,4 @@
-# Trabalho-1
+# Projeto Mensageria
 Trabalho 1º bimestre computação em nuvem II
 
 ## 📊 Banco de Dados
