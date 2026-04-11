@@ -8,3 +8,10 @@ spring:
   jpa:
     hibernate:
       ddl-auto: create
+    open-in-view: false
+
+app:
+  pubsub:
+    project-id: serjava-demo
+    subscription-id: sub-grupo6
+    credentials-path: ../key.json
