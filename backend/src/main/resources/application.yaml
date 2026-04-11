@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: grupo
+  datasource:
+    url: jdbc:postgresql://localhost:5432/banco_pubsub
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: create
