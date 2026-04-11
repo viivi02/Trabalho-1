@@ -43,6 +43,131 @@ Body pedido 3:
 
 ---
 
+## ARQUITETURA DO PROJETO
+
+### Visao Geral
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Google Cloud                             │
+│  ┌──────────┐    ┌───────────┐    ┌──────────────────────────┐  │
+│  │ Producer │───>│  Pub/Sub  │───>│  Subscription sub-grupo6 │  │
+│  │ (Prof.)  │    │  Topic    │    └────────────┬─────────────┘  │
+│  └──────────┘    └───────────┘                 │                │
+└────────────────────────────────────────────────┼────────────────┘
+                                                 │ gRPC streaming
+                                                 ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                     Nossa Aplicacao (Spring Boot)                   │
+│                                                                    │
+│  ┌──────────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │   PubSubConfig   │───>│ PubSubscriber│───>│   OrderService   │  │
+│  │ (credenciais,    │    │ (recebe msg, │    │ (deserializa,    │  │
+│  │  subscription)   │    │  ack/nack)   │    │  valida, persiste│  │
+│  └──────────────────┘    └──────────────┘    └───────┬──────────┘  │
+│                                                      │             │
+│                                                      ▼             │
+│  ┌──────────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │ OrderController  │───>│  OrderMapper │───>│ OrderRepository  │  │
+│  │ (REST endpoints) │    │ (Entity→DTO) │    │ (JPA + Specs)    │  │
+│  └──────────────────┘    └──────────────┘    └───────┬──────────┘  │
+│                                                      │             │
+└──────────────────────────────────────────────────────┼─────────────┘
+                                                       │
+                                                       ▼
+                                              ┌──────────────────┐
+                                              │   PostgreSQL 15  │
+                                              │  (Docker, 5432)  │
+                                              │  9 tabelas       │
+                                              └──────────────────┘
+```
+
+### Por que essa arquitetura?
+
+**1. Monolito modular (e nao microservicos)**
+
+Escolhemos um monolito bem estruturado em vez de microservicos porque:
+- O escopo do projeto e um unico dominio (pedidos) — nao justifica a complexidade de microservicos
+- Reduz overhead operacional: um unico deploy, um unico banco, sem comunicacao entre servicos
+- Para o contexto academico, simplifica a demonstracao e o entendimento do fluxo completo
+- Internamente, o codigo esta separado em camadas (controller → service → repository) seguindo o padrao MVC, o que facilita uma futura migracao se necessario
+
+**2. Spring Boot 4 + Java 21**
+
+- Spring Boot e o framework mais adotado no mercado Java para aplicacoes web e cloud
+- Java 21 (LTS) traz Records, Pattern Matching e Virtual Threads — usamos Records para todos os DTOs, eliminando boilerplate
+- O ecossistema Spring oferece integracao nativa com JPA, validacao, paginacao e documentacao OpenAPI
+
+**3. Google Cloud Pub/Sub (mensageria assincrona)**
+
+- Modelo publish/subscribe: o produtor (professor) publica mensagens e nosso consumer consome de forma assincrona e desacoplada
+- Garantia de entrega: se o consumer cai, as mensagens ficam retidas na subscription ate serem consumidas (ack/nack)
+- Escalabilidade: multiplos consumers podem ler da mesma subscription para paralelismo
+- Streaming pull via gRPC: conexao persistente de baixa latencia, sem polling
+
+**4. PostgreSQL (banco relacional)**
+
+- O enunciado exige persistencia em base relacional — PostgreSQL e o banco relacional open-source mais robusto
+- Suporte a tipos avancados (JSONB, arrays), transacoes ACID, e excelente desempenho
+- Docker simplifica o setup: `docker-compose up -d` e pronto
+- Hibernate/JPA cuida do mapeamento objeto-relacional automaticamente
+
+**5. Camadas bem definidas (separacao de responsabilidades)**
+
+| Camada | Classe | Responsabilidade |
+|--------|--------|------------------|
+| **Controller** | `OrderController` | Recebe HTTP, valida params, retorna ResponseEntity |
+| **Service** | `OrderService` | Logica de negocio, orquestracao, deduplicacao |
+| **Mapper** | `OrderMapper` | Conversao Entity ↔ DTO (calculo de totais aqui) |
+| **Specification** | `OrderSpecification` | Filtros dinamicos (status, cliente, produto) |
+| **Repository** | `OrderRepository` | Acesso ao banco via JPA + EntityGraph |
+| **Consumer** | `PubSubSubscriber` | Recebe mensagens, delega pro Service |
+| **Config** | `PubSubConfig`, `PubSubProperties` | Configuracao externalizada e type-safe |
+| **Exception** | `GlobalExceptionHandler` | Tratamento centralizado de erros (RFC 7807) |
+
+**Por que separar tanto?**
+- Cada classe tem uma unica responsabilidade (SRP — Single Responsibility Principle)
+- Facilita testes unitarios: posso testar o Mapper sem o banco, o Service sem o controller
+- Facilita manutencao: se o formato do DTO muda, so o Mapper e alterado
+- Facilita evolucao: se amanha trocar Pub/Sub por Kafka, so o consumer muda — o service continua igual
+
+**6. JPA Specifications para filtros dinamicos**
+
+Em vez de criar uma query para cada combinacao de filtro (status, cliente, produto), usamos o padrao Specification:
+- Composicao: cada filtro e uma Specification independente, combinadas com `.and()`
+- Reutilizavel: `hasStatus()`, `hasCustomer()`, `hasProduct()` podem ser usadas em qualquer consulta
+- Alternativa seria Criteria API diretamente — mais verbosa e menos legivel
+
+**7. DTOs como Java Records**
+
+- Records sao imutaveis por padrao — evitam bugs de estado compartilhado
+- Geram automaticamente `equals()`, `hashCode()`, `toString()`
+- Codigo limpo: um DTO que seria 40 linhas com getters/setters vira 5 linhas
+
+**8. Frontend servido pelo proprio Spring Boot**
+
+- Para simplificar o deploy, o frontend (HTML/CSS/JS puro) e servido como recurso estatico pelo Tomcat embutido
+- Nao precisamos de um servidor separado (Nginx, Apache) nem de um framework frontend (React, Angular)
+- Para o escopo do projeto, HTML com Fetch API nativo atende perfeitamente
+
+### Fluxo completo de um pedido
+
+```
+1. Professor publica JSON no topico Pub/Sub
+2. Google entrega a mensagem na subscription sub-grupo6
+3. PubSubSubscriber.receiver() recebe o JSON via streaming gRPC
+4. OrderService.processOrder() deserializa e verifica duplicata (existsByUuid)
+5. OrderService.buildOrder() converte DTO → Entity (com findOrCreate para cliente/seller)
+6. @PrePersist grava indexed_at automaticamente
+7. orderRepository.save() persiste no PostgreSQL (cascade salva items, payment, shipment, metadata)
+8. consumer.ack() confirma pro Pub/Sub que a mensagem foi processada
+9. API GET /orders consulta via JpaSpecificationExecutor com filtros dinamicos
+10. OrderMapper converte Entity → ResponseDTO calculando totais em tempo real
+11. Frontend consome a API e renderiza o dashboard
+```
+
+---
+
 ## ENTREGAVEIS
 
 ### Demonstracao do projeto funcionando
