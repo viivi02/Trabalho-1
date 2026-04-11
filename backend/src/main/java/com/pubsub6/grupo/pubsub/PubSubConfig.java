@@ -5,53 +5,45 @@ import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.cloud.pubsub.v1.Subscriber;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.pubsub.v1.ProjectSubscriptionName;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.pubsub6.grupo.config.PubSubProperties;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.io.FileInputStream;
 import java.io.IOException;
 
+@Slf4j
 @Configuration
+@RequiredArgsConstructor
 public class PubSubConfig {
 
-    private static final Logger log = LoggerFactory.getLogger(PubSubConfig.class);
-
-    @Value("${app.pubsub.project-id}")
-    private String projectId;
-
-    @Value("${app.pubsub.subscription-id}")
-    private String subscriptionId;
-
-    @Value("${app.pubsub.credentials-path}")
-    private String credentialsPath;
+    private final PubSubProperties props;
 
     @Bean(initMethod = "startAsync", destroyMethod = "stopAsync")
-    public Subscriber subscriber(PubSubSubscriber subscriber) throws IOException {
+    public Subscriber subscriber(PubSubSubscriber handler) throws IOException {
+        log.info("Conectando ao Pub/Sub: {}/{}", props.projectId(), props.subscriptionId());
 
-        log.info("Criando subscriber para {}/{} com credenciais de {}", projectId, subscriptionId, credentialsPath);
+        var credentials = ServiceAccountCredentials.fromStream(
+                new FileInputStream(props.credentialsPath()));
 
-        ServiceAccountCredentials credentials =
-                ServiceAccountCredentials.fromStream(new FileInputStream(credentialsPath));
+        var subscriptionName = ProjectSubscriptionName.of(
+                props.projectId(), props.subscriptionId());
 
-        ProjectSubscriptionName subscriptionName =
-                ProjectSubscriptionName.of(projectId, subscriptionId);
-
-        Subscriber sub = Subscriber.newBuilder(subscriptionName, subscriber.receiver())
+        Subscriber sub = Subscriber.newBuilder(subscriptionName, handler.receiver())
                 .setCredentialsProvider(() -> credentials)
                 .build();
 
         sub.addListener(new ApiService.Listener() {
             @Override
             public void failed(ApiService.State from, Throwable failure) {
-                log.error("Subscriber FALHOU (state={}): {}", from, failure.getMessage(), failure);
+                log.error("Subscriber falhou [state={}]: {}", from, failure.getMessage(), failure);
             }
 
             @Override
             public void running() {
-                log.info("Subscriber CONECTADO e recebendo mensagens");
+                log.info("Subscriber conectado e aguardando mensagens");
             }
         }, MoreExecutors.directExecutor());
 
