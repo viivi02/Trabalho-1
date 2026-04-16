@@ -31,3 +31,6 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Credenciais GCP (não commitar) ###
+key-grupo6.json

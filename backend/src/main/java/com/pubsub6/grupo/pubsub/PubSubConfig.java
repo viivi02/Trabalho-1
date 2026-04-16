@@ -20,7 +20,7 @@ public class PubSubConfig {
 
         ServiceAccountCredentials credentials =
                 ServiceAccountCredentials.fromStream(
-                        new FileInputStream("C:\\Users\\ramon\\Downloads\\key-grupo6.json"));
+                        new FileInputStream("key-grupo6.json"));
 
         ProjectSubscriptionName subscriptionName =
                 ProjectSubscriptionName.of(projectId, subscriptionId);
